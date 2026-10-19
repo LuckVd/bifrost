@@ -7747,6 +7747,10 @@ func clearAnthropicPassthroughForNonNativeProvider(ctx *schemas.BifrostContext, 
 	if baseProvider == schemas.Anthropic {
 		return
 	}
+	if baseProvider == schemas.Vertex && schemas.GetVertexEndpoint(ctx) != nil {
+		disableAnthropicPassthrough(ctx)
+		return
+	}
 	if (baseProvider == schemas.Vertex ||
 		baseProvider == schemas.Azure ||
 		baseProvider == schemas.BedrockMantle) &&
@@ -7787,6 +7791,11 @@ func clearGenAIPassthroughForNonGoogleProvider(ctx *schemas.BifrostContext, base
 		return
 	}
 	if baseProvider == schemas.Gemini {
+		return
+	}
+	if baseProvider == schemas.Vertex && schemas.GetVertexEndpoint(ctx) != nil {
+		ctx.SetValue(schemas.BifrostContextKeyUseRawRequestBody, false)
+		ctx.ClearValue(schemas.BifrostContextKeyRawRequestBodyTextRewriter)
 		return
 	}
 	if baseProvider == schemas.Vertex &&
