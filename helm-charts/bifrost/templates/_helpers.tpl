@@ -449,6 +449,9 @@ false
 {{- if hasKey .Values.bifrost.client "deleteExpiredVirtualKeys" }}
 {{- $_ := set $client "delete_expired_virtual_keys" .Values.bifrost.client.deleteExpiredVirtualKeys }}
 {{- end }}
+{{- if hasKey .Values.bifrost.client "skipAccessProfileUserVirtualKeys" }}
+{{- $_ := set $client "skip_access_profile_user_virtual_keys" .Values.bifrost.client.skipAccessProfileUserVirtualKeys }}
+{{- end }}
 {{- if hasKey .Values.bifrost.client "vkRotationCooldown" }}
 {{- $_ := set $client "vk_rotation_cooldown" .Values.bifrost.client.vkRotationCooldown }}
 {{- end }}

@@ -356,6 +356,7 @@ bifrost:
     # allowedHeaders: []                     # Additional allowed headers for CORS and WebSocket
     # hideDeletedVirtualKeysInFilters: false # Omit deleted virtual keys from logs/MCP filter data
     # deleteExpiredVirtualKeys: false        # Daily job deletes virtual keys past expires_at (per-key delete_after_expire overrides)
+    # skipAccessProfileUserVirtualKeys: false # Enterprise: when true, access profiles neither create nor delete a user's virtual keys (deleting the user still deletes them)
     # whitelistedRoutes: []                  # Routes that bypass auth middleware
     # routingChainMaxDepth: 10               # Maximum depth for routing rule chain evaluation
     # allowDirectKeys: false                 # Allow callers to bypass the key pool via x-bf-direct-key + Authorization header

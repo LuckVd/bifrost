@@ -4,13 +4,14 @@
 
 Official Helm charts for deploying [Bifrost](https://github.com/maximhq/bifrost) - a high-performance AI gateway with unified interface for multiple providers.
 
-**Latest Version:** 2.1.45
+**Latest Version:** 2.1.46
 
 ## Changelog
 
 ### Upcoming
 
 - Configurable request-body buffer pool limit via `bifrost.server.bodyBufferPoolLimitBytes`. Maps to `server.body_buffer_pool_limit_bytes` in config.json. Keep-alive connections free request-body buffers larger than this after each request instead of holding the largest body they ever read (default 4 MiB when unset; `0` means unlimited, the old behaviour).
+- Added `bifrost.client.skipAccessProfileUserVirtualKeys` (`client.skip_access_profile_user_virtual_keys`), default `false`. Enterprise only: when `true`, assigning an access profile to a user no longer issues them a virtual key and removing their last profile no longer deletes their keys; deleting the user still does.
 
 ### 2.1.45
 
