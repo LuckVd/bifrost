@@ -839,6 +839,7 @@ var (
 		"length":         FinishReasonMaxTokens,
 		"content_filter": FinishReasonSafety,
 		"tool_calls":     FinishReasonStop,
+		"CONTINUATION":   FinishReasonContinuation, // long-decode hop; the forward direction passes it through unmapped
 	}
 )
 
