@@ -3,9 +3,12 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -3446,4 +3449,149 @@ func TestCustomProviderConfigForRead(t *testing.T) {
 	if withSpec.GenericConfig.OpenAPI.Spec == "" {
 		t.Fatal("the stored config must not be mutated")
 	}
+}
+
+const genericHandlerTestSpec = `{"openapi":"3.0.0","info":{"title":"Echo","version":"1"},"paths":{"/post":{"post":{"operationId":"post","requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["q"],"properties":{"q":{"type":"string"}}}}}},"responses":{"200":{"description":"ok"}}}}}}`
+
+// TestGenericOpenAPIPreview pins the parse-only endpoint: an inline document is summarized, a
+// spec_url is fetched and returned inline, and an unauthenticated caller cannot point spec_url at
+// a private address.
+func TestGenericOpenAPIPreview(t *testing.T) {
+	SetLogger(&mockLogger{})
+	lib.SetLogger(&mockLogger{})
+	h := &ProviderHandler{inMemoryStore: &lib.Config{Providers: map[schemas.ModelProvider]configstore.ProviderConfig{}}}
+
+	t.Run("inline", func(t *testing.T) {
+		ctx := newTestRequestCtx(`{"spec": ` + strconv.Quote(genericHandlerTestSpec) + `}`)
+		h.previewGenericOpenAPISpec(ctx)
+		if ctx.Response.StatusCode() != fasthttp.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", ctx.Response.StatusCode(), ctx.Response.Body())
+		}
+		var resp GenericOpenAPIPreviewResponse
+		if err := json.Unmarshal(ctx.Response.Body(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		if resp.Title != "Echo" || resp.OperationCount != 1 || len(resp.Operations) != 1 || resp.Operations[0].Path != "/post" || !resp.Operations[0].HasBody {
+			t.Fatalf("unexpected preview: %+v", resp)
+		}
+		if resp.Spec != "" {
+			t.Fatal("an inline request does not echo the document back")
+		}
+	})
+	t.Run("invalid", func(t *testing.T) {
+		ctx := newTestRequestCtx(`{"spec": "nope: nope"}`)
+		h.previewGenericOpenAPISpec(ctx)
+		if ctx.Response.StatusCode() != fasthttp.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", ctx.Response.StatusCode(), ctx.Response.Body())
+		}
+	})
+	t.Run("spec_url fetched and inlined", func(t *testing.T) {
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(genericHandlerTestSpec))
+		}))
+		defer upstream.Close()
+		ctx := newTestRequestCtx(`{"spec_url": "` + upstream.URL + `/openapi.json"}`)
+		h.previewGenericOpenAPISpec(ctx)
+		if ctx.Response.StatusCode() != fasthttp.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", ctx.Response.StatusCode(), ctx.Response.Body())
+		}
+		var resp GenericOpenAPIPreviewResponse
+		if err := json.Unmarshal(ctx.Response.Body(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		if resp.Spec != genericHandlerTestSpec || !strings.HasPrefix(resp.SpecURL, upstream.URL) {
+			t.Fatalf("the fetched document and its final URL are returned for the client to store: %+v", resp)
+		}
+	})
+	t.Run("auth-bypassed caller cannot fetch a private spec_url", func(t *testing.T) {
+		ctx := newTestRequestCtx(`{"spec_url": "http://127.0.0.1:9/openapi.json"}`)
+		ctx.SetUserValue(schemas.BifrostContextKeyAuthBypassed, true)
+		h.previewGenericOpenAPISpec(ctx)
+		if ctx.Response.StatusCode() != fasthttp.StatusForbidden {
+			t.Fatalf("expected 403, got %d: %s", ctx.Response.StatusCode(), ctx.Response.Body())
+		}
+	})
+}
+
+// TestAddProvider_GenericOpenAPISpecIsCompiledAndStored pins that a generic provider created with
+// an inline document gets its metadata filled, that a broken document is refused, and that the
+// stored document is served by the openapi-spec endpoint while list/get leave it out.
+func TestAddProvider_GenericOpenAPISpecIsCompiledAndStored(t *testing.T) {
+	SetLogger(&mockLogger{})
+	lib.SetLogger(&mockLogger{})
+	h := &ProviderHandler{
+		inMemoryStore: &lib.Config{Providers: map[schemas.ModelProvider]configstore.ProviderConfig{}},
+		modelsManager: &mockModelsManager{},
+	}
+	create := func(spec string) *fasthttp.RequestCtx {
+		body, err := schemas.MarshalSorted(providerCreatePayload{
+			Provider:      "echo",
+			NetworkConfig: &schemas.NetworkConfig{BaseURL: "http://127.0.0.1:1"},
+			CustomProviderConfig: &schemas.CustomProviderConfig{BaseProviderType: schemas.Generic, GenericConfig: &schemas.GenericProviderConfig{
+				OpenAPI: &schemas.GenericOpenAPIConfig{Spec: spec, EnforceOperations: true},
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := &fasthttp.RequestCtx{}
+		ctx.Request.Header.SetMethod(fasthttp.MethodPost)
+		ctx.Request.SetRequestURI("/api/providers")
+		ctx.Request.SetBody(body)
+		h.addProvider(ctx)
+		return ctx
+	}
+
+	if ctx := create("not a spec"); ctx.Response.StatusCode() != fasthttp.StatusBadRequest {
+		t.Fatalf("a broken document must be refused, got %d: %s", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+	if ctx := create(genericHandlerTestSpec); ctx.Response.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+	stored := h.inMemoryStore.Providers["echo"].CustomProviderConfig.GenericConfig.OpenAPI
+	if stored.Spec != genericHandlerTestSpec || stored.OperationCount != 1 || stored.SpecTitle != "Echo" || stored.SpecHash == "" {
+		t.Fatalf("metadata must be filled on create: %+v", stored)
+	}
+
+	ctx := newTestRequestCtx("")
+	ctx.SetUserValue("provider", "echo")
+	h.getGenericOpenAPISpec(ctx)
+	if ctx.Response.StatusCode() != fasthttp.StatusOK || !strings.Contains(string(ctx.Response.Body()), `"spec":`) {
+		t.Fatalf("the stored document is served by its own endpoint, got %d: %s", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+	ctx = newTestRequestCtx("")
+	ctx.SetUserValue("provider", "missing")
+	h.getGenericOpenAPISpec(ctx)
+	if ctx.Response.StatusCode() != fasthttp.StatusNotFound {
+		t.Fatalf("expected 404 for an unknown provider, got %d", ctx.Response.StatusCode())
+	}
+}
+
+// TestMergeGenericOpenAPIUpdate pins that an update echoing the provider back without the document
+// (the shape list/get return) keeps the stored one, while a new document or a changed spec_url
+// replaces it.
+func TestMergeGenericOpenAPIUpdate(t *testing.T) {
+	stored := &schemas.CustomProviderConfig{BaseProviderType: schemas.Generic, GenericConfig: &schemas.GenericProviderConfig{OpenAPI: &schemas.GenericOpenAPIConfig{Spec: "openapi: 3.0.0", SpecHash: "h1", OperationCount: 2, SpecURL: schemas.Ptr("https://a/spec.json")}}}
+
+	echo := &schemas.CustomProviderConfig{BaseProviderType: schemas.Generic, GenericConfig: &schemas.GenericProviderConfig{OpenAPI: &schemas.GenericOpenAPIConfig{SpecURL: schemas.Ptr("https://a/spec.json"), EnforceOperations: true}}}
+	mergeGenericOpenAPIUpdate(echo, stored)
+	if echo.GenericConfig.OpenAPI.Spec != "openapi: 3.0.0" || echo.GenericConfig.OpenAPI.SpecHash != "h1" || echo.GenericConfig.OpenAPI.OperationCount != 2 || !echo.GenericConfig.OpenAPI.EnforceOperations {
+		t.Fatalf("stored document must be kept and the flag update applied: %+v", echo.GenericConfig.OpenAPI)
+	}
+
+	replaced := &schemas.CustomProviderConfig{BaseProviderType: schemas.Generic, GenericConfig: &schemas.GenericProviderConfig{OpenAPI: &schemas.GenericOpenAPIConfig{Spec: "openapi: 3.1.0"}}}
+	mergeGenericOpenAPIUpdate(replaced, stored)
+	if replaced.GenericConfig.OpenAPI.Spec != "openapi: 3.1.0" || replaced.GenericConfig.OpenAPI.SpecHash != "" {
+		t.Fatalf("a new document replaces the stored one: %+v", replaced.GenericConfig.OpenAPI)
+	}
+
+	retargeted := &schemas.CustomProviderConfig{BaseProviderType: schemas.Generic, GenericConfig: &schemas.GenericProviderConfig{OpenAPI: &schemas.GenericOpenAPIConfig{SpecURL: schemas.Ptr("https://b/spec.json")}}}
+	mergeGenericOpenAPIUpdate(retargeted, stored)
+	if retargeted.GenericConfig.OpenAPI.Spec != "" {
+		t.Fatal("a changed spec_url must not inherit the old document")
+	}
+
+	mergeGenericOpenAPIUpdate(nil, stored)
+	mergeGenericOpenAPIUpdate(echo, nil)
 }

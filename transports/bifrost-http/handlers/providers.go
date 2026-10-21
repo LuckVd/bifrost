@@ -247,6 +247,10 @@ func (h *ProviderHandler) RegisterRoutes(r *router.Router, middlewares ...schema
 	r.GET("/api/providers/{provider}/keys", lib.ChainMiddlewares(h.listProviderKeys, middlewares...))
 	r.GET("/api/providers/{provider}/keys/{key_id}", lib.ChainMiddlewares(h.getProviderKey, middlewares...))
 	r.POST("/api/providers", lib.ChainMiddlewares(h.addProvider, middlewares...))
+	// Generic passthrough providers: parse an OpenAPI document without creating anything, and read
+	// the stored document the list/get responses leave out.
+	r.POST("/api/providers/openapi/preview", lib.ChainMiddlewares(h.previewGenericOpenAPISpec, middlewares...))
+	r.GET("/api/providers/{provider}/openapi-spec", lib.ChainMiddlewares(h.getGenericOpenAPISpec, middlewares...))
 	r.POST("/api/providers/{provider}/keys", lib.ChainMiddlewares(h.createProviderKey, middlewares...))
 	r.PUT("/api/providers/{provider}", lib.ChainMiddlewares(h.updateProvider, middlewares...))
 	r.PUT("/api/providers/{provider}/keys/{key_id}", lib.ChainMiddlewares(h.updateProviderKey, middlewares...))
@@ -477,6 +481,10 @@ func (h *ProviderHandler) addProvider(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, fasthttp.StatusBadRequest, fmt.Sprintf("Invalid custom provider config: %v", err))
 		return
 	}
+	if status, msg := prepareGenericOpenAPIConfig(ctx, genericOpenAPIBlock(config.CustomProviderConfig)); status != 0 {
+		SendError(ctx, status, msg)
+		return
+	}
 	// The config-file path validates prompt_cache against config.schema.json; this is the
 	// same contract on the API path, so a TTL the file would reject cannot be stored here
 	// and then rejected by the provider at request time instead.
@@ -642,6 +650,11 @@ func (h *ProviderHandler) updateProvider(ctx *fasthttp.RequestCtx) {
 	prospective.CustomProviderConfig = payload.CustomProviderConfig
 	if err := lib.ValidateCustomProviderUpdate(prospective, *oldConfigRaw, provider); err != nil {
 		SendError(ctx, fasthttp.StatusBadRequest, fmt.Sprintf("Invalid custom provider config: %v", err))
+		return
+	}
+	mergeGenericOpenAPIUpdate(payload.CustomProviderConfig, oldConfigRaw.CustomProviderConfig)
+	if status, msg := prepareGenericOpenAPIConfig(ctx, genericOpenAPIBlock(payload.CustomProviderConfig)); status != 0 {
+		SendError(ctx, status, msg)
 		return
 	}
 	if err := lib.ValidatePromptCache(payload.PromptCache); err != nil {

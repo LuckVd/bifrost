@@ -25825,3 +25825,29 @@ func TestGenericKeyValueRequired(t *testing.T) {
 		assert.False(t, GenericKeyValueRequired(&schemas.CustomProviderConfig{BaseProviderType: schemas.Generic, GenericConfig: &schemas.GenericProviderConfig{Auth: schemas.GenericAuthConfig{Type: authType}}}), string(authType))
 	}
 }
+
+// TestPrepareGenericOpenAPIFromFile pins the config.json path for a generic provider's document:
+// a spec_file is read relative to the config directory and the metadata filled, a missing file or
+// a block naming no source is an error, and non-generic providers are untouched.
+func TestPrepareGenericOpenAPIFromFile(t *testing.T) {
+	const doc = `{"openapi":"3.0.0","info":{"title":"Echo","version":"1"},"paths":{"/get":{"get":{"responses":{"200":{"description":"ok"}}}}}}`
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "echo.json"), []byte(doc), 0o600))
+
+	cpc := &schemas.CustomProviderConfig{BaseProviderType: schemas.Generic, GenericConfig: &schemas.GenericProviderConfig{OpenAPI: &schemas.GenericOpenAPIConfig{SpecFile: schemas.Ptr("echo.json")}}}
+	require.NoError(t, PrepareGenericOpenAPIFromFile(cpc, dir))
+	assert.Equal(t, doc, cpc.GenericConfig.OpenAPI.Spec)
+	assert.Equal(t, "Echo", cpc.GenericConfig.OpenAPI.SpecTitle)
+	assert.Equal(t, 1, cpc.GenericConfig.OpenAPI.OperationCount)
+	assert.Len(t, cpc.GenericConfig.OpenAPI.SpecHash, 64)
+
+	missing := &schemas.CustomProviderConfig{BaseProviderType: schemas.Generic, GenericConfig: &schemas.GenericProviderConfig{OpenAPI: &schemas.GenericOpenAPIConfig{SpecFile: schemas.Ptr("nope.json")}}}
+	require.Error(t, PrepareGenericOpenAPIFromFile(missing, dir))
+
+	empty := &schemas.CustomProviderConfig{BaseProviderType: schemas.Generic, GenericConfig: &schemas.GenericProviderConfig{OpenAPI: &schemas.GenericOpenAPIConfig{}}}
+	require.Error(t, PrepareGenericOpenAPIFromFile(empty, dir))
+
+	require.NoError(t, PrepareGenericOpenAPIFromFile(&schemas.CustomProviderConfig{BaseProviderType: schemas.OpenAI}, dir))
+	require.NoError(t, PrepareGenericOpenAPIFromFile(nil, dir))
+	require.NoError(t, PrepareGenericOpenAPIFromFile(&schemas.CustomProviderConfig{BaseProviderType: schemas.Generic}, dir), "no openapi block is fine")
+}

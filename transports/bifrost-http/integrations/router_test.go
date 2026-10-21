@@ -1768,8 +1768,14 @@ func BenchmarkChatGPTPassthroughStreamDecision(b *testing.B) {
 type genericPassthroughTestAccount struct{ baseURL string }
 
 func (a genericPassthroughTestAccount) GetConfiguredProviders() ([]schemas.ModelProvider, error) {
-	return []schemas.ModelProvider{"echo", schemas.OpenAI}, nil
+	return []schemas.ModelProvider{"echo", "spec", schemas.OpenAI}, nil
 }
+
+// genericTestSpec lists POST /post (JSON body with a required string q) and GET /get.
+const genericTestSpec = `{"openapi":"3.0.0","info":{"title":"Echo","version":"1"},"paths":{
+	"/post":{"post":{"operationId":"post","requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["q"],"properties":{"q":{"type":"string"}}}}}},"responses":{"200":{"description":"ok"}}}},
+	"/get":{"get":{"operationId":"get","responses":{"200":{"description":"ok"}}}},
+	"/items/{id}":{"delete":{"operationId":"del","responses":{"200":{"description":"ok"}}}}}}`
 
 func (a genericPassthroughTestAccount) GetKeysForProvider(_ context.Context, p schemas.ModelProvider) ([]schemas.Key, error) {
 	return []schemas.Key{{ID: "k-" + string(p), Value: *schemas.NewSecretVar("operator-" + string(p)), Models: schemas.WhiteList{"*"}, Weight: 1.0}}, nil
@@ -1787,6 +1793,14 @@ func (a genericPassthroughTestAccount) GetConfigForProvider(p schemas.ModelProvi
 				Auth:      schemas.GenericAuthConfig{Type: schemas.GenericAuthHeader, HeaderName: "x-api-key"},
 				Usage:     &schemas.GenericUsageConfig{ModelPath: "engine"},
 				Streaming: &schemas.GenericStreamingConfig{Paths: []string{"/live/**"}},
+			},
+		}
+	case "spec":
+		cfg.CustomProviderConfig = &schemas.CustomProviderConfig{
+			BaseProviderType: schemas.Generic,
+			GenericConfig: &schemas.GenericProviderConfig{
+				Auth:    schemas.GenericAuthConfig{Type: schemas.GenericAuthBearer},
+				OpenAPI: &schemas.GenericOpenAPIConfig{Spec: genericTestSpec, EnforceOperations: true, ValidateRequestBody: true},
 			},
 		}
 	case schemas.OpenAI:
@@ -1951,5 +1965,48 @@ func BenchmarkHandleGenericPassthrough(b *testing.B) {
 		if ctx.Response.StatusCode() != fasthttp.StatusOK {
 			b.Fatalf("status %d: %s", ctx.Response.StatusCode(), ctx.Response.Body())
 		}
+	}
+}
+
+// A generic provider with an OpenAPI document and both flags on refuses operations the document
+// does not list and JSON bodies that fail the operation schema, before anything is forwarded; a
+// provider without a document is untouched.
+func TestGenericPassthroughSpecEnforcement(t *testing.T) {
+	r, takeHits := newGenericPassthroughFixture(t)
+	tests := []struct {
+		name, method, uri, body string
+		wantStatus              int
+		wantUpstream, wantBody  string
+	}{
+		{name: "listed op with valid body relayed", method: fasthttp.MethodPost, uri: "/passthrough/spec/post", body: `{"q":"hi"}`, wantStatus: fasthttp.StatusOK, wantUpstream: "/post"},
+		{name: "templated path matches", method: fasthttp.MethodDelete, uri: "/passthrough/spec/items/42", wantStatus: fasthttp.StatusOK, wantUpstream: "/items/42"},
+		{name: "body failing the schema is a 400", method: fasthttp.MethodPost, uri: "/passthrough/spec/post", body: `{"q":1}`, wantStatus: fasthttp.StatusBadRequest, wantBody: "does not match the operation schema"},
+		{name: "missing required body is a 400", method: fasthttp.MethodPost, uri: "/passthrough/spec/post", wantStatus: fasthttp.StatusBadRequest, wantBody: "request body is required"},
+		{name: "unlisted op is a 404", method: fasthttp.MethodDelete, uri: "/passthrough/spec/post", body: `{}`, wantStatus: fasthttp.StatusNotFound, wantBody: "not in the provider's OpenAPI spec"},
+		{name: "provider without a document is not checked", method: fasthttp.MethodDelete, uri: "/passthrough/echo/anything", wantStatus: fasthttp.StatusOK, wantUpstream: "/anything"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			takeHits()
+			var ctx fasthttp.RequestCtx
+			ctx.Request.Header.SetMethod(tc.method)
+			ctx.Request.SetRequestURI(tc.uri)
+			ctx.Request.Header.SetContentType("application/json")
+			if tc.body != "" {
+				ctx.Request.SetBodyString(tc.body)
+			}
+			r.Handler(&ctx)
+			got := takeHits()
+			require.Equal(t, tc.wantStatus, ctx.Response.StatusCode(), "body: %s", ctx.Response.Body())
+			if tc.wantBody != "" {
+				require.Contains(t, string(ctx.Response.Body()), tc.wantBody)
+			}
+			if tc.wantUpstream == "" {
+				require.Empty(t, got, "a refused request never reaches the upstream")
+				return
+			}
+			require.Len(t, got, 1)
+			require.Equal(t, tc.wantUpstream, got[0].path)
+		})
 	}
 }

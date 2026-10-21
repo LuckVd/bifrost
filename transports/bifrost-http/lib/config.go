@@ -57,6 +57,7 @@ import (
 	"github.com/maximhq/bifrost/plugins/routing/rules"
 	"github.com/maximhq/bifrost/plugins/semanticcache"
 	"github.com/maximhq/bifrost/plugins/telemetry"
+	"github.com/maximhq/bifrost/transports/v2/bifrost-http/lib/passthroughspec"
 	"gorm.io/gorm"
 )
 
@@ -1902,7 +1903,7 @@ func syncAuthoritativeProvidersInStore(
 
 // processProvider processes a single provider configuration from config file
 func processProvider(
-	_ *Config,
+	config *Config,
 	providerName string,
 	providerCfgInFile configstore.ProviderConfig,
 	providersInConfigStore map[schemas.ModelProvider]configstore.ProviderConfig,
@@ -1911,6 +1912,9 @@ func processProvider(
 
 	if err := ValidateCustomProvider(providerCfgInFile, provider); err != nil {
 		return err
+	}
+	if err := PrepareGenericOpenAPIFromFile(providerCfgInFile.CustomProviderConfig, config.ConfigDir()); err != nil {
+		return fmt.Errorf("provider %s: %w", provider, err)
 	}
 
 	baseProvider := provider
@@ -9761,6 +9765,43 @@ func validateGenericCustomProvider(config configstore.ProviderConfig, cpc *schem
 	if allowed != (schemas.AllowedRequests{}) {
 		return fmt.Errorf("custom provider validation failed: generic providers only serve passthrough and passthrough_stream")
 	}
+	return nil
+}
+
+// PrepareGenericOpenAPIFromFile normalizes the OpenAPI block of a generic provider declared in
+// config.json: a spec_file is read now (relative to the config directory) so the stored row
+// carries the document, a spec_url is fetched now so enforcement never silently lapses, and the
+// server-computed metadata is filled from a compile so the row matches an API-created one.
+func PrepareGenericOpenAPIFromFile(cpc *schemas.CustomProviderConfig, configDir string) error {
+	if cpc == nil || cpc.BaseProviderType != schemas.Generic || cpc.GenericConfig == nil || cpc.GenericConfig.OpenAPI == nil {
+		return nil
+	}
+	oc := cpc.GenericConfig.OpenAPI
+	if strings.TrimSpace(oc.Spec) == "" && oc.SpecFile != nil && strings.TrimSpace(*oc.SpecFile) != "" {
+		data, err := openapimcp.LoadFile(*oc.SpecFile, configDir)
+		if err != nil {
+			return fmt.Errorf("generic_config.openapi.spec_file: %w", err)
+		}
+		oc.Spec = string(data)
+	}
+	if strings.TrimSpace(oc.Spec) == "" && oc.SpecURL != nil && strings.TrimSpace(*oc.SpecURL) != "" {
+		fetchCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		data, finalURL, err := openapimcp.LoadURL(fetchCtx, network.NewPrivateNetworkHTTPClient(15*time.Second), strings.TrimSpace(*oc.SpecURL))
+		if err != nil {
+			return fmt.Errorf("generic_config.openapi.spec_url: %w", err)
+		}
+		oc.Spec = string(data)
+		oc.SpecURL = &finalURL
+	}
+	if strings.TrimSpace(oc.Spec) == "" {
+		return fmt.Errorf("generic_config.openapi requires one of spec, spec_file or spec_url")
+	}
+	spec, err := passthroughspec.Compile(oc)
+	if err != nil {
+		return fmt.Errorf("generic_config.openapi.spec: %w", err)
+	}
+	passthroughspec.Metadata(oc, spec)
 	return nil
 }
 
