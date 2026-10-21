@@ -3,6 +3,8 @@ import {
 	CreateProviderKeyRequest,
 	ListProviderKeysResponse,
 	ListProvidersResponse,
+	GenericOpenAPIConfig,
+	GenericOpenAPIPreviewResponse,
 	ModelProvider,
 	ModelProviderKey,
 	ModelProviderName,
@@ -193,6 +195,21 @@ export const providersApi = baseApi.injectEndpoints({
 		getProvider: builder.query<ModelProvider, string>({
 			query: (provider) => `/providers/${encodeURIComponent(provider)}`,
 			providesTags: (result, error, provider) => [{ type: "Providers", id: provider }],
+		}),
+
+		// The OpenAPI document of a generic passthrough provider; provider reads leave the text out.
+		getProviderOpenAPISpec: builder.query<GenericOpenAPIConfig, string>({
+			query: (provider) => `/providers/${encodeURIComponent(provider)}/openapi-spec`,
+			providesTags: (result, error, provider) => [{ type: "Providers", id: provider }],
+		}),
+
+		// Parse an OpenAPI document (inline or by URL) without creating anything.
+		previewProviderOpenAPISpec: builder.mutation<GenericOpenAPIPreviewResponse, { spec?: string; spec_url?: string }>({
+			query: (body) => ({
+				url: "/providers/openapi/preview",
+				method: "POST",
+				body,
+			}),
 		}),
 
 		getProviderKeys: builder.query<ModelProviderKey[], string>({
@@ -532,6 +549,8 @@ export const providersApi = baseApi.injectEndpoints({
 export const {
 	useGetProvidersQuery,
 	useGetProviderQuery,
+	useGetProviderOpenAPISpecQuery,
+	usePreviewProviderOpenAPISpecMutation,
 	useGetProviderKeysQuery,
 	useGetProviderKeyQuery,
 	useCreateProviderMutation,

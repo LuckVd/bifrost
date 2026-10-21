@@ -779,3 +779,80 @@ models-base:
               additionalProperties: true
       '500':
         $ref: '../../openapi.yaml#/components/responses/InternalError'
+
+providers-openapi-preview:
+  post:
+    operationId: previewProviderOpenAPISpec
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `ModelProvider:Create` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
+    summary: Parse an OpenAPI document for a generic passthrough provider
+    description: |
+      Parses an OpenAPI or Swagger document (inline, or fetched from `spec_url`) without creating
+      anything, and returns its operations so a generic provider's routes can be prefilled. A
+      fetched document is returned inline for the client to store on the provider.
+    tags:
+      - Providers
+    security:
+      - ManagementBearerAuth: []
+      - BasicAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../../schemas/management/providers.yaml#/GenericOpenAPIPreviewRequest'
+    responses:
+      '200':
+        description: Parsed document summary
+        content:
+          application/json:
+            schema:
+              $ref: '../../schemas/management/providers.yaml#/GenericOpenAPIPreviewResponse'
+      '400':
+        $ref: '../../openapi.yaml#/components/responses/BadRequest'
+      '403':
+        description: An unauthenticated caller named a spec_url that resolves to a private address
+
+provider-openapi-spec:
+  get:
+    operationId: getProviderOpenAPISpec
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `ModelProvider:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
+    summary: Get the OpenAPI document stored on a generic passthrough provider
+    description: |
+      Returns the document text and its server-computed metadata. Provider list and get
+      responses leave the text out because it can be large.
+    tags:
+      - Providers
+    security:
+      - ManagementBearerAuth: []
+      - BasicAuth: []
+    parameters:
+      - name: provider
+        in: path
+        required: true
+        schema:
+          type: string
+    responses:
+      '200':
+        description: The stored document
+        content:
+          application/json:
+            schema:
+              $ref: '../../schemas/management/providers.yaml#/ProviderOpenAPISpecResponse'
+      '404':
+        description: Provider not found, or it has no OpenAPI document
