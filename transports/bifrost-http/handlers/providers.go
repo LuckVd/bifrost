@@ -1709,7 +1709,7 @@ func (h *ProviderHandler) getProviderResponseFromConfig(provider schemas.ModelPr
 		SendBackRawResponse:      config.SendBackRawResponse,
 		StoreRawRequestResponse:  config.StoreRawRequestResponse,
 		IgnoreProviderCost:       config.IgnoreProviderCost,
-		CustomProviderConfig:     config.CustomProviderConfig,
+		CustomProviderConfig:     customProviderConfigForRead(config.CustomProviderConfig),
 		OpenAIConfig:             config.OpenAIConfig,
 		PromptCache:              config.PromptCache,
 		InjectedTools:            config.InjectedTools,
@@ -1718,6 +1718,19 @@ func (h *ProviderHandler) getProviderResponseFromConfig(provider schemas.ModelPr
 		Description:              config.Description,
 		ConfigHash:               config.ConfigHash,
 	}
+}
+
+// customProviderConfigForRead strips an inline OpenAPI document from a generic provider's config
+// before it is returned by the list/get endpoints: the document can be large and is served by its
+// own endpoint, while the server-computed metadata next to it is kept.
+func customProviderConfigForRead(cpc *schemas.CustomProviderConfig) *schemas.CustomProviderConfig {
+	if cpc == nil || cpc.GenericConfig == nil || cpc.GenericConfig.OpenAPI == nil || cpc.GenericConfig.OpenAPI.Spec == "" {
+		return cpc
+	}
+	out := *cpc
+	out.GenericConfig = cpc.GenericConfig.Clone()
+	out.GenericConfig.OpenAPI.Spec = ""
+	return &out
 }
 
 func getProviderFromCtx(ctx *fasthttp.RequestCtx) (schemas.ModelProvider, error) {
