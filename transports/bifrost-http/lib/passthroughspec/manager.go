@@ -8,8 +8,8 @@ import (
 
 // Manager caches one compiled Spec per generic provider. A provider rebuild (any config update)
 // hands the relay a new *GenericOpenAPIConfig pointer, so the cache keys invalidation on pointer
-// identity: a hit is an RLock, a map read and a pointer compare; a miss compiles under the write
-// lock. Entries for providers that no longer exist are swept on the next compile.
+// identity: a hit is an RLock, a map read and a pointer compare; a miss compiles outside the lock
+// and then stores. Entries for providers that no longer exist are swept on the next compile.
 type Manager struct {
 	mu         sync.RWMutex
 	entries    map[schemas.ModelProvider]*entry
@@ -41,12 +41,15 @@ func (m *Manager) Lookup(provider schemas.ModelProvider, cfg *schemas.GenericOpe
 		return e.spec, e.err
 	}
 
+	// Compile without holding the lock: a large document must not stall every other provider's
+	// requests while it is parsed. Two concurrent first requests may both compile; the later
+	// write wins and the results are equivalent.
+	spec, err := Compile(cfg)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if e = m.entries[provider]; e != nil && e.cfg == cfg {
 		return e.spec, e.err
 	}
-	spec, err := Compile(cfg)
 	m.entries[provider] = &entry{cfg: cfg, spec: spec, err: err}
 	if m.configured != nil {
 		for name := range m.entries {
