@@ -33,13 +33,13 @@ interface VirtualMCPAccessTabProps {
 export default function VirtualMCPAccessTab({ vmcpId, value, onChange, isCreate, active, stagedCreate = false }: VirtualMCPAccessTabProps) {
 	// A user's access-profile managed key derives its MCP access from that profile, so it cannot be
 	// assigned directly here (the API rejects it too). A key a team, business unit or customer owns can
-	// be, after a confirmation that names its owner.
+	// be, and so can one assigned to a user, after a confirmation that names who it belongs to.
 	const { data, isLoading, isError, refetch } = useGetVirtualKeysQuery(
 		{ limit: 1000, exclude_access_profile_managed_virtual: true },
 		{ skip: !active || (isCreate && !stagedCreate) },
 	);
 	const [fetchVirtualKey] = useLazyGetVirtualKeyQuery();
-	// A picked key that belongs to another team, business unit or customer, waiting on the confirmation.
+	// A picked key that belongs to a team, business unit, customer or user, waiting on the confirmation.
 	const [pendingOwnedVk, setPendingOwnedVk] = useState<{ id: string; name: string; owner: VirtualKeyOwner } | null>(null);
 
 	if (isCreate && !stagedCreate) {
@@ -135,7 +135,7 @@ export default function VirtualMCPAccessTab({ vmcpId, value, onChange, isCreate,
 
 			{!stagedCreate && <VirtualMcpAccessProfiles vmcpId={vmcpId} active={active} />}
 
-			{/* Granting MCP access to a key another team, business unit or customer owns is confirmed. */}
+			{/* Granting MCP access to a key that belongs to a team, business unit, customer or user is confirmed. */}
 			<AlertDialog
 				open={!!pendingOwnedVk}
 				onOpenChange={(next) => {

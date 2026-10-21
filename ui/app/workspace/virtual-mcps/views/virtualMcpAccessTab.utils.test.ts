@@ -14,12 +14,21 @@ describe("virtualKeyOwner", () => {
 		});
 	});
 
+	it("names the user a key is assigned to", () => {
+		expect(virtualKeyOwner({ assigned_user: { id: "u1", name: "Ada", email: "ada@example.com" } })).toEqual({ kind: "user", name: "Ada" });
+		expect(virtualKeyOwner({ assigned_user: { id: "u1", name: "", email: "ada@example.com" } })).toEqual({
+			kind: "user",
+			name: "ada@example.com",
+		});
+	});
+
 	it("falls back to the owner's id when its name was not loaded", () => {
 		expect(virtualKeyOwner({ team_id: "t1" })).toEqual({ kind: "team", name: "t1" });
 	});
 
 	it("reports no owner for an unowned key or an unknown one", () => {
 		expect(virtualKeyOwner({})).toBeUndefined();
+		expect(virtualKeyOwner({ assigned_user: null })).toBeUndefined();
 		expect(virtualKeyOwner(undefined)).toBeUndefined();
 	});
 });
